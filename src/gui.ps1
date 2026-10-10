@@ -4,6 +4,13 @@
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+# The window belongs to powershell.exe, so without its own app ID the taskbar groups it under
+# PowerShell and shows PowerShell's icon instead of ours. Must be set before any window exists.
+Add-Type -Name Shell -Namespace WebXRVive -MemberDefinition @'
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+'@
+[void][WebXRVive.Shell]::SetCurrentProcessExplicitAppUserModelID('wilenkristoffer.ViveWebXRBridge')
+
 $coreFile = Join-Path $PSScriptRoot 'core.ps1'
 $BridgeLog = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
 . $coreFile

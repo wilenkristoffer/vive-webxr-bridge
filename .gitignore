@@ -4,3 +4,4 @@ extensions/*
 
 # Built by build.ps1; attached to GitHub releases instead of committed.
 *.exe
+dist/
