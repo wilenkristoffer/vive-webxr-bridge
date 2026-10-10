@@ -1,0 +1,3 @@
+# Third-party browser extensions are installed locally, not shipped with this repo.
+extensions/*
+!extensions/README.md
