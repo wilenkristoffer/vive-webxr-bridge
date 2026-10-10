@@ -20,13 +20,13 @@ Three separate things go wrong:
 
 ## What this tool does
 
-`Start WebXR.cmd` opens a separate Edge window set up for VR. For as long as that window is open, it:
+`Vive WebXR Bridge.cmd` opens a small window with a **Start/Stop** switch. While the bridge is on, it runs a separate Edge window set up for VR, and:
 
 1. **Blocks the quit link.** It points `vrmonitor://` at a harmless logger, so VIVE's quit signal goes nowhere and SteamVR keeps running.
 2. **Starts Edge on VIVE's OpenXR runtime,** with VIVE's crashing layers switched off. Both are set through environment variables for this Edge window only.
 3. **Pauses SteamVR's compositor during a VR session.** Otherwise SteamVR keeps drawing, VIVE's compositor alternates between its picture and the browser's, and the image flickers. The tool watches VIVE's log for when the browser takes and releases the headset, and resumes SteamVR's compositor when the session ends.
 4. **Loads browser extensions from `extensions/`,** such as a YouTube VR player (see below).
-5. **Restores everything when Edge closes,** then offers to restart SteamVR and VIVE Console. VIVE doesn't hand the display back to SteamVR by itself.
+5. **Restores everything when you press Stop or close that Edge window.** It can also restart SteamVR and VIVE Console, since VIVE doesn't hand the display back to SteamVR by itself.
 
 Nothing is changed permanently. Your normal Edge, your default browser and the system-wide OpenXR runtime are not touched. If the tool is interrupted, it puts the `vrmonitor://` link back the next time it starts.
 
@@ -41,11 +41,15 @@ Tested with VIVE Software 1.0.9.202 (VIVE driver 1.0.5.4), SteamVR 2.17.10 and E
 
 ## Usage
 
-1. Start VIVE Console and SteamVR as usual, and wait until the headset shows SteamVR.
-2. Double-click **`Start WebXR.cmd`**. A status window and an Edge window open.
-3. In that Edge window, open a WebXR site and press **Enter VR**. The status window prints *"VR session started"*.
-4. To leave VR, use the site's exit button (on the desktop) or close the tab. You can enter VR again in the same window.
-5. When you're done, close Edge and press Enter in the status window to restart SteamVR and VIVE Console.
+1. Double-click **`Vive WebXR Bridge.cmd`** and press **Start**. If VIVE Console and SteamVR aren't running, the bridge starts them first. An empty Edge window opens.
+2. Open a WebXR site in that Edge window and press **Enter VR**. The links on the **Status** tab open sites in it. The status changes to *"In VR"*.
+3. To leave VR, use the site's exit button (on the desktop) or close the tab. You can enter VR again in the same window.
+4. When you're done, press **Stop** or close the bridge's Edge window.
+
+The **Log** tab shows what the bridge is doing. The **Status** tab has a button to start or restart SteamVR and VIVE Console, and two settings, saved between runs:
+
+- **Start VIVE Console and SteamVR when I press Start** (on by default)
+- **Restart SteamVR and VIVE Console when I press Stop** (off by default). Without it, the headset may show VIVE's empty environment after Stop until you restart SteamVR.
 
 Sites to try: the [WebXR samples](https://immersive-web.github.io/webxr-samples/), [three.js WebXR examples](https://threejs.org/examples/?q=webxr), [A-Frame examples](https://aframe.io/examples/) and [Moon Rider](https://moonrider.xyz).
 
@@ -63,7 +67,7 @@ YouTube no longer shows a VR button on desktop. To get one, install [video2webxr
 ## Troubleshooting
 
 - **"Can't find VIVE's OpenXR runtime":** VIVE Console isn't installed in the default location.
-- **No "VR session started" line:** VIVE's log format may have changed. The tool looks for `Scene focus change to <pid>` in `%ProgramData%\HTC\ViveSoftware\ViveVRRuntime\logs\vrserver_<date>.txt`.
+- **The status never changes to "In VR":** VIVE's log format may have changed. The tool looks for `Scene focus change to <pid>` in `%ProgramData%\HTC\ViveSoftware\ViveVRRuntime\logs\vrserver_<date>.txt`.
 - **SteamVR doesn't detect the headset after a restart:** quit SteamVR, close VIVE Console, wait about 20 seconds, then start VIVE Console and SteamVR again. If VIVE's runtime is still shutting down when SteamVR starts, its driver fails to load.
 
 ## License
