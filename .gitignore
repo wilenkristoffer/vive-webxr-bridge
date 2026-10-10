@@ -1,3 +1,6 @@
 # Third-party browser extensions are installed locally, not shipped with this repo.
 extensions/*
 !extensions/README.md
+
+# Built by build.ps1; attached to GitHub releases instead of committed.
+*.exe

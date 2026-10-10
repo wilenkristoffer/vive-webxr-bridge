@@ -20,7 +20,7 @@ Three separate things go wrong:
 
 ## What this tool does
 
-`Vive WebXR Bridge.cmd` opens a small window with a **Start/Stop** switch. While the bridge is on, it runs a separate Edge window set up for VR, and:
+`VIVE WebXR Bridge.exe` opens a small window with a **Start/Stop** switch. While the bridge is on, it runs a separate Edge window set up for VR, and:
 
 1. **Blocks the quit link.** It points `vrmonitor://` at a harmless logger, so VIVE's quit signal goes nowhere and SteamVR keeps running.
 2. **Starts Edge on VIVE's OpenXR runtime,** with VIVE's crashing layers switched off. Both are set through environment variables for this Edge window only.
@@ -39,9 +39,19 @@ Nothing is changed permanently. Your normal Edge, your default browser and the s
 
 Tested with VIVE Software 1.0.9.202 (VIVE driver 1.0.5.4), SteamVR 2.17.10 and Edge 155 on Windows 11.
 
+## Install
+
+Download the latest release and unzip it anywhere. Or, from a clone of this repository, build the program yourself. This needs nothing beyond Windows, since it uses the C# compiler included with the .NET Framework:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+That creates `VIVE WebXR Bridge.exe` next to `build.ps1`. Keep it in this folder, because it starts the bridge from `src\`.
+
 ## Usage
 
-1. Double-click **`Vive WebXR Bridge.cmd`** and press **Start**. If VIVE Console and SteamVR aren't running, the bridge starts them first. An empty Edge window opens.
+1. Double-click **`VIVE WebXR Bridge.exe`** and press **Start**. If VIVE Console and SteamVR aren't running, the bridge starts them first. An empty Edge window opens.
 2. Open a WebXR site in that Edge window and press **Enter VR**. The links on the **Status** tab open sites in it. The status changes to *"In VR"*.
 3. To leave VR, use the site's exit button (on the desktop) or close the tab. You can enter VR again in the same window.
 4. When you're done, press **Stop** or close the bridge's Edge window.
