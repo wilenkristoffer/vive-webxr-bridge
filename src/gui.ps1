@@ -141,7 +141,7 @@ $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9.5)
-try { $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($Bridge.EdgeExe) } catch {}
+try { $form.Icon = New-Object System.Drawing.Icon (Join-Path (Split-Path -Parent $PSScriptRoot) 'assets\icon.ico') } catch {}
 
 $toggle = New-Object System.Windows.Forms.Button
 $toggle.Location = New-Object System.Drawing.Point(16, 14)
