@@ -1,4 +1,4 @@
-# Core of vive-webxr-bridge: everything except the window. Dot-sourced by gui.ps1, and by the
+﻿# Core of vive-webxr-bridge: everything except the window. Dot-sourced by gui.ps1, and by the
 # background runspaces the GUI uses for slow work (loading extensions, restarting SteamVR).
 #
 # Why each step exists is documented in docs/how-it-works.md. In short, while the bridge is on:
@@ -14,11 +14,14 @@ $Bridge = @{
     ViveConsole   = "${env:ProgramFiles(x86)}\VIVE\Updater\App\ViveEyeSettings\ViveSettings.exe"
     ViveLogDir    = Join-Path $env:ProgramData 'HTC\ViveSoftware\ViveVRRuntime\logs'
     ExtensionsDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'extensions'
+    FixesDir      = Join-Path $PSScriptRoot 'webxr-fixes'   # the bridge's own WebXR fixes, always loaded
     DebugPort     = 9339
 }
 $Bridge.ProfileDir = Join-Path $Bridge.StateDir 'EdgeProfile'
 $Bridge.HandlerBackup = Join-Path $Bridge.StateDir 'vrmonitor-handler.txt'
 $Bridge.BlockLog = Join-Path $Bridge.StateDir 'blocked-links.log'
+$Bridge.PausedFile = Join-Path $Bridge.StateDir 'paused-compositor.txt'
+$Bridge.LogFile = Join-Path $Bridge.StateDir 'bridge.log'
 New-Item -ItemType Directory -Force $Bridge.StateDir | Out-Null
 
 if (-not ('WebXRVive.Proc' -as [type])) {
@@ -44,21 +47,57 @@ function Test-BridgePrerequisites {
 function Test-SteamVrUp { [bool](Get-Process vrcompositor -ErrorAction SilentlyContinue) }
 function Test-ViveUp { [bool](Get-Process ViveVRServer -ErrorAction SilentlyContinue) }
 
+# The backup holds the original handler command, or one of two markers when there was none to keep:
+#   <created> <key>  the bridge created <key> (SteamVR registered the link machine-wide, or not at all),
+#                    so restoring deletes it again;
+#   <empty>          the key existed with no command, so restoring removes the bridge's command.
 function Block-QuitLink {
-    (Get-Item $Bridge.HandlerKey).GetValue('') | Set-Content $Bridge.HandlerBackup
-    Set-ItemProperty $Bridge.HandlerKey -Name '(default)' -Value "`"C:\Windows\System32\cmd.exe`" /c echo %DATE% %TIME% blocked: %1 >> `"$($Bridge.BlockLog)`""
-    Write-BridgeLog 'SteamVR quit link blocked.'
+    try {
+        if (Test-Path $Bridge.HandlerKey) {
+            $orig = (Get-Item $Bridge.HandlerKey).GetValue('')
+            $backup = if ($orig) { $orig } else { '<empty>' }
+        } else {
+            $created = $Bridge.HandlerKey
+            while (-not (Test-Path (Split-Path $created -Parent))) { $created = Split-Path $created -Parent }
+            New-Item $Bridge.HandlerKey -Force -ErrorAction Stop | Out-Null
+            $backup = "<created> $created"
+        }
+        Set-Content $Bridge.HandlerBackup $backup -Encoding UTF8 -ErrorAction Stop
+        Set-ItemProperty $Bridge.HandlerKey -Name '(default)' -Value "`"C:\Windows\System32\cmd.exe`" /c echo %DATE% %TIME% blocked: %1 >> `"$($Bridge.BlockLog)`"" -ErrorAction Stop
+        Write-BridgeLog 'SteamVR quit link blocked.'
+    } catch {
+        Write-BridgeLog "Couldn't block SteamVR's quit link, so VIVE may close SteamVR when VR starts: $($_.Exception.Message)"
+    }
 }
 
 # Also called on start, in case a crash or closed window last time left the link redirected.
 function Restore-QuitLink {
     if (-not (Test-Path $Bridge.HandlerBackup)) { return }
-    $orig = (Get-Content $Bridge.HandlerBackup -Raw).Trim()
-    if ($orig -and (Get-Item $Bridge.HandlerKey).GetValue('') -ne $orig) {
-        Set-ItemProperty $Bridge.HandlerKey -Name '(default)' -Value $orig
-        Write-BridgeLog 'SteamVR quit link restored.'
+    $orig = (Get-Content $Bridge.HandlerBackup -Raw -Encoding UTF8).Trim()
+    try {
+        if ($orig -like '<created> *') {
+            $created = $orig.Substring(10)
+            if (Test-Path $created) { Remove-Item $created -Recurse -ErrorAction Stop; Write-BridgeLog 'SteamVR quit link restored.' }
+        } elseif ($orig -eq '<empty>') {
+            if ((Test-Path $Bridge.HandlerKey) -and (Get-Item $Bridge.HandlerKey).GetValue('')) {
+                # Remove-ItemProperty can't remove a key's default value.
+                $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(($Bridge.HandlerKey -replace '^HKCU:\\'), $true)
+                $key.DeleteValue('', $false)
+                $key.Close()
+                Write-BridgeLog 'SteamVR quit link restored.'
+            }
+        } elseif ($orig) {
+            if (-not (Test-Path $Bridge.HandlerKey) -or (Get-Item $Bridge.HandlerKey).GetValue('') -ne $orig) {
+                if (-not (Test-Path $Bridge.HandlerKey)) { New-Item $Bridge.HandlerKey -Force -ErrorAction Stop | Out-Null }
+                Set-ItemProperty $Bridge.HandlerKey -Name '(default)' -Value $orig -ErrorAction Stop
+                Write-BridgeLog 'SteamVR quit link restored.'
+            }
+        }
+        Remove-Item $Bridge.HandlerBackup
+    } catch {
+        # Keep the backup so the next start tries again.
+        Write-BridgeLog "Couldn't restore SteamVR's quit link: $($_.Exception.Message)"
     }
-    Remove-Item $Bridge.HandlerBackup
 }
 
 function Get-BridgeEdgeProcesses {
@@ -91,8 +130,8 @@ function Stop-BridgeEdge {
 
 # Edge ignores --load-extension, so extensions go in through the DevTools Extensions.loadUnpacked command.
 function Install-BridgeExtensions {
-    $folders = Get-ChildItem $Bridge.ExtensionsDir -Directory -ErrorAction SilentlyContinue |
-        Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') }
+    $folders = @(Get-Item $Bridge.FixesDir -ErrorAction SilentlyContinue) + @(Get-ChildItem $Bridge.ExtensionsDir -Directory -ErrorAction SilentlyContinue) |
+        Where-Object { $_ -and (Test-Path (Join-Path $_.FullName 'manifest.json')) }
     if (-not $folders) { return }
     $version = $null
     for ($i = 0; $i -lt 30 -and -not $version; $i++) {
@@ -116,22 +155,42 @@ function Install-BridgeExtensions {
     }
 }
 
+# The paused process is also written to a file, so that if the bridge or the PC dies mid-session,
+# the next start can resume it (Resume-LeftoverCompositor) instead of leaving SteamVR frozen.
 function Suspend-SteamVrCompositor {
     $comp = Get-Process vrcompositor -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($comp) { [void][WebXRVive.Proc]::NtSuspendProcess($comp.Handle) }
+    if ($comp) {
+        Set-Content $Bridge.PausedFile ('{0} {1:o}' -f $comp.Id, $comp.StartTime)
+        [void][WebXRVive.Proc]::NtSuspendProcess($comp.Handle)
+    }
     return $comp
 }
 
 function Resume-SteamVrCompositor($comp) {
     if ($comp) { [void][WebXRVive.Proc]::NtResumeProcess($comp.Handle) }
+    Remove-Item $Bridge.PausedFile -ErrorAction SilentlyContinue
 }
 
-# Follows VIVE's server log (UTF-16), which records which process has the headset.
-function Open-ViveLogReader {
-    $file = Join-Path $Bridge.ViveLogDir ('vrserver_{0:yyyyMMdd}.txt' -f (Get-Date))
+function Resume-LeftoverCompositor {
+    if (-not (Test-Path $Bridge.PausedFile)) { return }
+    $id, $started = (Get-Content $Bridge.PausedFile -Raw).Trim() -split ' ', 2
+    $comp = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue
+    # The start time check makes sure the ID hasn't been reused by another process since.
+    if ($comp -and $comp.Name -eq 'vrcompositor' -and ('{0:o}' -f $comp.StartTime) -eq $started) {
+        [void][WebXRVive.Proc]::NtResumeProcess($comp.Handle)
+        Write-BridgeLog 'SteamVR display resumed (it was left paused when the bridge last stopped unexpectedly).'
+    }
+    Remove-Item $Bridge.PausedFile -ErrorAction SilentlyContinue
+}
+
+# VIVE's server log records which process has the headset. VIVE starts a new file each day.
+function Get-ViveLogFile { Join-Path $Bridge.ViveLogDir ('vrserver_{0:yyyyMMdd}.txt' -f (Get-Date)) }
+
+# Opens a VIVE log (UTF-16) for following; at its end unless -FromStart.
+function Open-ViveLogReader([string]$file, [switch]$FromStart) {
     if (-not (Test-Path $file)) { return $null }
     $stream = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite')
-    [void]$stream.Seek(0, 'End')
+    if (-not $FromStart) { [void]$stream.Seek(0, 'End') }
     return New-Object IO.StreamReader($stream, [Text.Encoding]::Unicode)
 }
 

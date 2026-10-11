@@ -1,8 +1,30 @@
-# vive-webxr-bridge window: a Start/Stop switch, status, site links and a live log.
+﻿# vive-webxr-bridge window: a Start/Stop switch, status, site links and a live log.
 # The bridge logic is in core.ps1; slow work (extensions, SteamVR restart) runs in background
 # runspaces so the window stays responsive.
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+$appName = 'VIVE WebXR Bridge'
+
+# The exe starts this script without a console, so an error would otherwise just mean the window
+# never appears (or vanishes). Show it, save the log, and undo what the bridge changed.
+trap {
+    $err = "$($_.Exception.Message)`n$($_.InvocationInfo.PositionMessage)"
+    try { if ($state.On) { Stop-Bridge $false } else { Restore-QuitLink } } catch {}
+    # Written directly, since the error may have come before core.ps1 was loaded.
+    $logFile = "$env:LOCALAPPDATA\WebXRVive\bridge.log"
+    try { Save-BridgeLog } catch {}
+    try { [IO.File]::AppendAllText($logFile, ('[{0:HH:mm:ss}] Stopped by an error: {1}' -f (Get-Date), $err) + "`r`n") } catch {}
+    [System.Windows.Forms.MessageBox]::Show("The bridge stopped because of an error:`n`n$err`n`nThe log is in $logFile", $appName, 'OK', 'Error') | Out-Null
+    exit 1
+}
+
+# One bridge at a time: two would overwrite each other's backup of the SteamVR quit link.
+$singleInstance = New-Object System.Threading.Mutex($false, 'Local\wilenkristoffer.ViveWebXRBridge')
+$owned = try { $singleInstance.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $true }
+if (-not $owned) {
+    [System.Windows.Forms.MessageBox]::Show("$appName is already running.", $appName, 'OK', 'Information') | Out-Null
+    exit
+}
 
 # The window belongs to powershell.exe, so without its own app ID the taskbar groups it under
 # PowerShell and shows PowerShell's icon instead of ours. Must be set before any window exists.
@@ -11,16 +33,33 @@ Add-Type -Name Shell -Namespace WebXRVive -MemberDefinition @'
 '@
 [void][WebXRVive.Shell]::SetCurrentProcessExplicitAppUserModelID('wilenkristoffer.ViveWebXRBridge')
 
+# Moves queued log lines to the Log tab (once the window exists) and the log file.
+function Save-BridgeLog {
+    $line = $null
+    $lines = while ($BridgeLog.TryDequeue([ref]$line)) { $line }
+    if (-not $lines) { return }
+    if ($logBox) { $logBox.AppendText(($lines -join [Environment]::NewLine) + [Environment]::NewLine) }
+    try { [IO.File]::AppendAllLines($Bridge.LogFile, [string[]]$lines) } catch {}
+}
+
 $coreFile = Join-Path $PSScriptRoot 'core.ps1'
 $BridgeLog = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
 . $coreFile
 $settings = Get-BridgeSettings
+
+# The Log tab's lines also go to a file, for troubleshooting after the window is closed.
+# The previous run's log is kept once it gets large.
+if ((Test-Path $Bridge.LogFile) -and (Get-Item $Bridge.LogFile).Length -gt 1MB) {
+    Move-Item $Bridge.LogFile (Join-Path $Bridge.StateDir 'bridge.old.log') -Force
+}
+[IO.File]::AppendAllLines($Bridge.LogFile, [string[]]@('', "--- $appName started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---"))
 
 $state = @{
     On          = $false
     Busy        = $null     # text shown while SteamVR is being started/restarted in the background
     StartedAt   = [datetime]::MinValue
     Reader      = $null
+    ReaderFile  = $null     # the VIVE log file Reader follows
     Paused      = $null     # suspended vrcompositor process while a browser session has the headset
     SessionPid  = $null
     HadSession  = $false
@@ -60,12 +99,12 @@ function Complete-BackgroundWork {
 function Start-Bridge {
     $problem = Test-BridgePrerequisites
     if ($problem) {
-        [System.Windows.Forms.MessageBox]::Show("$problem`n`nThis tool needs Microsoft Edge and a headset that runs through VIVE Console.", 'vive-webxr-bridge', 'OK', 'Error') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("$problem`n`nThis tool needs Microsoft Edge and a headset that runs through VIVE Console.", $appName, 'OK', 'Error') | Out-Null
         return
     }
     if (-not ((Test-SteamVrUp) -and (Test-ViveUp))) {
         if (-not $settings.AutoStartSteamVr) {
-            [System.Windows.Forms.MessageBox]::Show("Start VIVE Console and SteamVR first, and wait until the headset shows SteamVR.", 'vive-webxr-bridge', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("Start VIVE Console and SteamVR first, and wait until the headset shows SteamVR.", $appName, 'OK', 'Information') | Out-Null
             return
         }
         Invoke-SteamVrWork 'Start-SteamVrAndVive' 'Starting SteamVR...' {
@@ -81,8 +120,9 @@ function Enable-Bridge {
     if (Get-BridgeEdgeProcesses) { Write-BridgeLog 'Closing a bridge Edge window left over from before.'; Stop-BridgeEdge; Start-Sleep 2 }
 
     Block-QuitLink
-    $state.Reader = Open-ViveLogReader
-    if (-not $state.Reader) { Write-BridgeLog "VIVE's log for today wasn't found; VR sessions won't be detected." }
+    $state.ReaderFile = Get-ViveLogFile
+    $state.Reader = Open-ViveLogReader $state.ReaderFile
+    if (-not $state.Reader) { Write-BridgeLog "VIVE's log for today wasn't found yet; VR sessions are detected once VIVE creates it." }
     Start-BridgeEdge
     Start-BackgroundWork 'Install-BridgeExtensions' $null
     $state.On = $true
@@ -99,6 +139,7 @@ function Stop-Bridge([bool]$offerRestart = $true) {
     Stop-BridgeEdge
     Restore-QuitLink
     if ($state.Reader) { $state.Reader.Close(); $state.Reader = $null }
+    $state.ReaderFile = $null
     Write-BridgeLog 'Bridge is OFF.'
     Update-View
     if ($offerRestart -and $settings.RestartOnStop) {
@@ -121,7 +162,19 @@ function Invoke-SteamVrWork([string]$call, [string]$busyText, [scriptblock]$then
 
 # Called on a timer: follows VIVE's log to pause/resume SteamVR around browser VR sessions.
 function Update-Session {
-    if (-not $state.Reader) { return }
+    # After midnight VIVE writes to a new file, and today's may not have existed when the bridge
+    # started. Either way, follow the new file from its start (the old one was read to its end).
+    $file = Get-ViveLogFile
+    if (($file -ne $state.ReaderFile -or -not $state.Reader) -and (Test-Path $file)) {
+        if ($state.Reader) { Read-ViveLog; $state.Reader.Close() }
+        $state.ReaderFile = $file
+        $state.Reader = Open-ViveLogReader $file -FromStart
+        Write-BridgeLog "Following VIVE's log $(Split-Path $file -Leaf)."
+    }
+    if ($state.Reader) { Read-ViveLog }
+}
+
+function Read-ViveLog {
     while (($line = $state.Reader.ReadLine()) -ne $null) {
         if ($line -match 'Scene focus change to (\d+)') {
             $p = Get-Process -Id ([int]$matches[1]) -ErrorAction SilentlyContinue
@@ -142,7 +195,7 @@ function Update-Session {
 # --- window ----------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'vive-webxr-bridge'
+$form.Text = $appName
 $form.Size = New-Object System.Drawing.Size(480, 500)
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
@@ -264,14 +317,15 @@ function Update-View {
         $headline.Text = 'OFF'
         $headline.ForeColor = [System.Drawing.Color]::DimGray
     }
+    # The title shows the state too, so it can be read from the taskbar.
+    $form.Text = "$appName - $($headline.Text)"
     foreach ($l in $links) { $l.Enabled = $state.On }
 }
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 300
 $timer.Add_Tick({
-    $line = $null
-    while ($BridgeLog.TryDequeue([ref]$line)) { $logBox.AppendText($line + [Environment]::NewLine) }
+    Save-BridgeLog
     Complete-BackgroundWork
     if ($state.On) { Update-Session }
     if (((Get-Date) - $state.LastCheck).TotalSeconds -ge 2) {
@@ -285,7 +339,7 @@ $timer.Add_Tick({
     }
 })
 
-$form.Add_Shown({ Restore-QuitLink; Update-View; Write-BridgeLog 'Ready. Start VIVE Console and SteamVR, then press Start.'; $timer.Start() })
-$form.Add_FormClosing({ $timer.Stop(); Stop-Bridge $false })
+$form.Add_Shown({ Restore-QuitLink; Resume-LeftoverCompositor; Update-View; Write-BridgeLog 'Ready. Start VIVE Console and SteamVR, then press Start.'; $timer.Start() })
+$form.Add_FormClosing({ $timer.Stop(); Stop-Bridge $false; Save-BridgeLog })
 
 [void]$form.ShowDialog()

@@ -2,6 +2,8 @@
 
 Use **WebXR in the browser** (VR websites, WebXR demos, YouTube 360° videos) with a **VIVE Pro 2** or another headset that runs through **VIVE Console**.
 
+> **Experimental, use at your own risk.** No warranty, and the authors are not liable for any damage. See [Disclaimer](#disclaimer).
+
 ## The problem
 
 On these headsets, pressing "Enter VR" on a WebXR site in Edge or Chrome never shows anything in the headset. SteamVR sits on its loading screen, showing "Next up" or "Waiting…", while the browser is in fact running the VR session and sending frames. Native SteamVR games work fine.
@@ -25,10 +27,10 @@ Three separate things go wrong:
 1. **Blocks the quit link.** It points `vrmonitor://` at a harmless logger, so VIVE's quit signal goes nowhere and SteamVR keeps running.
 2. **Starts Edge on VIVE's OpenXR runtime,** with VIVE's crashing layers switched off. Both are set through environment variables for this Edge window only.
 3. **Pauses SteamVR's compositor during a VR session.** Otherwise SteamVR keeps drawing, VIVE's compositor alternates between its picture and the browser's, and the image flickers. The tool watches VIVE's log for when the browser takes and releases the headset, and resumes SteamVR's compositor when the session ends.
-4. **Loads browser extensions from `extensions/`,** such as a YouTube VR player (see below).
+4. **Loads browser extensions:** its own WebXR fixes (`src/webxr-fixes/`, see Limitations), and any you add to `extensions/`, such as a YouTube VR player (see below).
 5. **Restores everything when you press Stop or close that Edge window.** It can also restart SteamVR and VIVE Console, since VIVE doesn't hand the display back to SteamVR by itself.
 
-Nothing is changed permanently. Your normal Edge, your default browser and the system-wide OpenXR runtime are not touched. If the tool is interrupted, it puts the `vrmonitor://` link back the next time it starts.
+Nothing is changed permanently. Your normal Edge, your default browser and the system-wide OpenXR runtime are not touched. If the tool is interrupted, for example by a crash, it puts the `vrmonitor://` link back and resumes a paused SteamVR the next time it starts.
 
 ## Requirements
 
@@ -70,15 +72,24 @@ YouTube no longer shows a VR button on desktop. To get one, install [video2webxr
 ## Limitations
 
 - **Controllers:** VIVE's runtime reports the controllers as VIVE Cosmos or Oculus Touch controllers, so button mappings in some WebXR apps may be off. Head tracking and the picture work.
+- **No hand tracking:** with VIVE's runtime, a VR request that asks for hand tracking never starts, so the Enter VR button does nothing. The tool takes hand tracking out of such requests, and those sites (like the three.js hand input examples) run with controllers instead.
 - **Between sessions,** the headset may show VIVE's empty environment, or flicker briefly, until the next session starts or SteamVR is restarted.
 - **The tool's Edge window accepts remote-control (DevTools) connections from this PC while it's open.** That's how extensions get loaded. It closes with the window.
 - **It relies on VIVE's internal behaviour,** such as how its log is worded. A VIVE update could break it.
 
 ## Troubleshooting
 
+The Log tab is also saved to `%LOCALAPPDATA%\WebXRVive\bridge.log`, and errors that stop the tool are shown in a message and written there.
+
 - **"Can't find VIVE's OpenXR runtime":** VIVE Console isn't installed in the default location.
 - **The status never changes to "In VR":** VIVE's log format may have changed. The tool looks for `Scene focus change to <pid>` in `%ProgramData%\HTC\ViveSoftware\ViveVRRuntime\logs\vrserver_<date>.txt`.
 - **SteamVR doesn't detect the headset after a restart:** quit SteamVR, close VIVE Console, wait about 20 seconds, then start VIVE Console and SteamVR again. If VIVE's runtime is still shutting down when SteamVR starts, its driver fails to load.
+
+## Disclaimer
+
+This is an experimental tool, provided as is, without any warranty. It has been tested on one PC only, and not over long periods of use. While it runs, it changes a registry setting, starts and closes SteamVR, VIVE Console and Edge, and pauses SteamVR's compositor.
+
+**Use it at your own risk.** The authors are not liable for any damage or loss caused by using it, including damage to hardware, software or data. See [LICENSE](LICENSE) for the full terms.
 
 ## License
 

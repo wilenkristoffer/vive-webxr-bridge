@@ -13,6 +13,7 @@ New-Item -ItemType Directory -Force "$stage\src", "$stage\assets", "$stage\exten
 
 Copy-Item (Join-Path $root 'VIVE WebXR Bridge.exe'), (Join-Path $root 'README.md'), (Join-Path $root 'LICENSE') $stage
 Copy-Item (Join-Path $root 'src\*.ps1') "$stage\src"
+Copy-Item (Join-Path $root 'src\webxr-fixes') "$stage\src" -Recurse
 Copy-Item (Join-Path $root 'assets\icon.ico') "$stage\assets"
 Copy-Item (Join-Path $root 'extensions\README.md') "$stage\extensions"
 Copy-Item (Join-Path $root 'docs\*') "$stage\docs"
